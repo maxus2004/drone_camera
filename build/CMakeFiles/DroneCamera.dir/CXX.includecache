@@ -1,0 +1,32 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+../src/main.h
+
+/home/pi/drone_camera/src/main.cpp
+iostream
+-
+fstream
+-
+pigpiod_if2.h
+-
+opencv2/opencv.hpp
+-
+thread
+-
+string
+-
+asio/ip/udp.hpp
+-
+asio/ip/tcp.hpp
+-
+asio/io_service.hpp
+-
+main.h
+-
+

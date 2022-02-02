@@ -1,0 +1,13 @@
+[
+{
+  "directory": "/home/pi/drone_camera/build",
+  "command": "/bin/g++-8  -DASIO_STANDALONE -I../src -isystem /usr/local/include/opencv4  -O3 -DNDEBUG   -o CMakeFiles/DroneCamera.dir/src/main.cpp.o -c /home/pi/drone_camera/src/main.cpp",
+  "file": "/home/pi/drone_camera/src/main.cpp"
+},
+
+{
+  "directory": "/home/pi/drone_camera/build",
+  "command": "/bin/g++-8  -DASIO_STANDALONE -I../src -isystem /usr/local/include/opencv4  -O3 -DNDEBUG   -o CMakeFiles/DroneCamera.dir/src/navigation.cpp.o -c /home/pi/drone_camera/src/navigation.cpp",
+  "file": "/home/pi/drone_camera/src/navigation.cpp"
+}
+]
