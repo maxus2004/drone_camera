@@ -2,6 +2,8 @@
 #include <opencv2/aruco.hpp>
 #include <iostream>
 #include "navigation.h"
+#include "fc_serial.h"
+#include "main.h"
 
 using namespace std;
 
@@ -14,6 +16,8 @@ double distCoeffsArray[5] = {0.1399191037477049, -0.4173075385395212, -0.0006774
 double bxs = 0.085, bys = 0.165, bzs = 0.06;
 double bxo = -0.0425, byo = -0.0825, bzo = 0;
 
+cv::Vec3d targetOffset = cv::Vec3d(0,-0.09,0);
+
 vector<cv::Point3d> boxPoints = {
     cv::Point3d(bxo, byo, bzo),
     cv::Point3d(bxo + bxs, byo, bzo),
@@ -23,15 +27,14 @@ vector<cv::Point3d> boxPoints = {
     cv::Point3d(bxo + bxs, byo, bzo + bzs),
     cv::Point3d(bxo + bxs, byo + bys, bzo + bzs),
     cv::Point3d(bxo, byo + bys, bzo + bzs),
-    cv::Point3d(-0.01,-0.01,bzo),
-    cv::Point3d(0.01,0.01,bzo),
-    cv::Point3d(0.01,-0.01,bzo),
-    cv::Point3d(-0.01,0.01,bzo)};
+    cv::Point3d(-0.01, -0.01, bzo),
+    cv::Point3d(0.01, 0.01, bzo),
+    cv::Point3d(0.01, -0.01, bzo),
+    cv::Point3d(-0.01, 0.01, bzo)};
 
 vector<pair<int, int>> crossLines = {
     {8, 9},
-    {10, 11}
-};
+    {10, 11}};
 
 vector<pair<int, int>> boxLines = {
     //bottom size
@@ -84,14 +87,42 @@ void navigationInit()
     parameters = cv::aruco::DetectorParameters::create();
     distCoeffs = cv::Mat(1, 5, CV_64F, distCoeffsArray);
     cameraMatrix = cv::Mat(3, 3, CV_64F, cameraMatrixArray);
+
+    init_serial();
 }
 
-cv::Vec3d rotate(cv::Vec3d tvec, cv::Vec3d rvec){
+cv::Vec3d rotate(cv::Vec3d tvec, cv::Vec3d rvec)
+{
     cv::Mat rmat;
-    cv::Rodrigues(rvec,rmat);
-    cv::Mat tmat2 = rmat*cv::Mat(tvec);
-    cv::Vec3d tvec2 = cv::Vec3d((double*)tmat2.data);
+    cv::Rodrigues(rvec, rmat);
+    cv::Mat tmat2 = rmat * cv::Mat(tvec);
+    cv::Vec3d tvec2 = cv::Vec3d((double *)tmat2.data);
     return tvec2;
+}
+
+cv::Vec3d rotate(cv::Vec3d tvec, cv::Mat rmat)
+{
+    cv::Mat tmat2 = rmat * cv::Mat(tvec);
+    cv::Vec3d tvec2 = cv::Vec3d((double *)tmat2.data);
+    return tvec2;
+}
+
+cv::Mat quatToMat(cv::Vec4d q)
+{
+    double w = q[0], x = q[1], y = q[2], z = q[3];
+    double mat[9] =
+        {1-2*y*y-2*z*z, 2*x*y-2*w*z,   2*x*z+2*w*y,
+        2*x*y+2*w*z,    1-2*x*x-2*z*z, 2*y*z-2*w*x,
+        2*x*z-2*w*y,    2*y*z+2*w*x,   1-2*x*x-2*y*y};
+    cv::Mat rmat = cv::Mat(3, 3, CV_64F, mat);
+    return rmat.clone();
+}
+cv::Vec3d quatToRvec(cv::Vec4d q)
+{
+    cv::Mat mat = quatToMat(q);
+    cv::Vec3d rvec;
+    cv::Rodrigues(mat, rvec);
+    return rvec;
 }
 
 void detectPosition(cv::Mat frame)
@@ -117,34 +148,79 @@ void detectPosition(cv::Mat frame)
     {
         cv::Point2d pt1 = projectedBoxPoints[line.first];
         cv::Point2d pt2 = projectedBoxPoints[line.second];
-        cv::line(frame, pt1, pt2, cv::Scalar(0, 0, 255), 4);
+        cv::line(frame, pt1, pt2, cv::Scalar(0, 0, 255), 2);
     }
     for (pair<int, int> line : crossLines)
     {
         cv::Point2d pt1 = projectedBoxPoints[line.first];
         cv::Point2d pt2 = projectedBoxPoints[line.second];
-        cv::line(frame, pt1, pt2, cv::Scalar(0, 255, 0), 4);
+        cv::line(frame, pt1, pt2, cv::Scalar(0, 255, 0), 2);
+    }
+
+    //calculate drone rotation
+    cv::Vec3d droneRvec;
+    droneRvec = quatToRvec(fc_getRotation());
+    {
+        float a = droneRvec[0];
+        droneRvec[0] = droneRvec[1];
+        droneRvec[1] = a;
+    }
+    cv::Mat droneRmat;
+    cv::Rodrigues(droneRvec,droneRmat);
+
+    //calclualte rotation around z axis
+    cv::Mat zRmat;
+    {
+        cv::Vec3d v = cv::Vec3d(1, 0, 0);
+        v = rotate(v, droneRvec);
+        double len = sqrt(v[0] * v[0] + v[1] * v[1]);
+        double sinA = v[1] / len;
+        double cosA = v[0] / len;
+        double r_array[9] = {
+            cosA, -sinA, 0,
+            sinA, cosA, 0,
+            0, 0, 1};
+        cv::Mat(3, 3, CV_64F, r_array).copyTo(zRmat);
+    }
+
+    //calculate camera rotation
+    cv::Mat cameraRmat;
+    {
+        double a = getCameraAngle();
+        a = a / 180 * CV_PI;
+        double sinA = sin(a);
+        double cosA = cos(a);
+        double r_array[9] = {
+            1, 0, 0,
+            0, cosA, -sinA,
+            0, sinA, cosA};
+        cv::Mat(3, 3, CV_64F, r_array).copyTo(cameraRmat);
+        cameraRmat = cameraRmat * droneRmat;
     }
 
     //calculate drone position
-    cv::Vec3d droneRvec, droneTvec;
-    droneTvec = rotate(boxTvec,-boxRvec);
+    cv::Vec3d droneTvec = rotate(boxTvec, cameraRmat.t());
+    //calculate vector to target
+
+    cv::Vec3d target;
+    target[0] = droneTvec[0];
+    target[1] = droneTvec[1];
+    target = rotate(target, zRmat);
+    target += targetOffset;
+    //draw vector to target
+    cv::line(frame, cv::Point(80, 400), cv::Point(80 + target[0] * 200, 400 + target[1] * 200), cv::Scalar(255, 0, 0), 2);
 
     //print coordinates
-    stringstream boxPosString;
-    boxPosString << "box:   x: ";
-    boxPosString << boxTvec[0];
-    boxPosString << " y: ";
-    boxPosString << boxTvec[1];
-    boxPosString << " z: ";
-    boxPosString << boxTvec[2];
-    cv::putText(frame, boxPosString.str(), cv::Point(10, 20), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
-    stringstream dronePosString;
-    dronePosString << "drone: x: ";
-    dronePosString << droneTvec[0];
-    dronePosString << " y: ";
-    dronePosString << droneTvec[1];
-    dronePosString << " z: ";
-    dronePosString << droneTvec[2];
-    cv::putText(frame, dronePosString.str(), cv::Point(10, 40), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
+    stringstream outString;
+    outString << "box:    x: ";
+    outString << boxTvec;
+    cv::putText(frame, outString.str(), cv::Point(10, 60), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
+    outString.str(std::string());
+    outString << "drone:  x: ";
+    outString << droneTvec;
+    cv::putText(frame, outString.str(), cv::Point(10, 80), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
+    outString.str(std::string());
+    outString << "target: ";
+    outString << target;
+    cv::putText(frame, outString.str(), cv::Point(10, 100), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
 }

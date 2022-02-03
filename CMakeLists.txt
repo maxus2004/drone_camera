@@ -6,7 +6,7 @@ enable_testing()
 
 
 include_directories(src)
-add_executable(DroneCamera src/main.cpp src/navigation.cpp)
+add_executable(DroneCamera src/main.cpp src/navigation.cpp src/fc_serial.cpp)
 
 find_library(PIGPIOD_IF2 NAMES pigpiod_if2)
 target_link_libraries(DroneCamera ${PIGPIOD_IF2})

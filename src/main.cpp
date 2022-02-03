@@ -17,6 +17,8 @@
 using namespace std;
 using namespace asio::ip;
 
+int servoPin = 18;
+
 chrono::system_clock::time_point lastServoMove;
 bool servoActive = false;
 int pigpioID;
@@ -33,15 +35,23 @@ udp::socket udpSocket(asio_service);
 udp::endpoint remote_endpoint;
 
 double fps = 0;
+double load = 0;
 chrono::high_resolution_clock::duration frameInterval;
 chrono::high_resolution_clock::duration frameTime;
 chrono::high_resolution_clock::duration waitTime;
 
+int cameraAngle = 0;
+
+int getCameraAngle(){
+    return cameraAngle;
+}
+
 void setAngle(int angle)
 {
+    cameraAngle = angle;
     lastServoMove = chrono::system_clock::now();
     servoActive = true;
-    set_PWM_dutycycle(pigpioID, 24, 650 + (angle * 2000) / 180);
+    set_PWM_dutycycle(pigpioID, servoPin, 650 + ((135+angle) * 2000) / 180);
 }
 
 void servoDisableLoop()
@@ -52,7 +62,7 @@ void servoDisableLoop()
         if (servoActive && (lastServoMove + 1s) < now)
         {
             servoActive = false;
-            set_PWM_dutycycle(pigpioID, 24, 0);
+            set_PWM_dutycycle(pigpioID, servoPin, 0);
         }
         this_thread::sleep_for(0.1s);
     }
@@ -91,6 +101,15 @@ void cameraLoop()
             detectPosition(frame);
         }
 
+        stringstream outString;
+        outString << "fps: ";
+        outString << fps;
+        cv::putText(frame, outString.str(), cv::Point(10, 20), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
+        outString.str(std::string());
+        outString << "load: ";
+        outString << load;
+        cv::putText(frame, outString.str(), cv::Point(10, 40), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
+
         frame.copyTo(frameToSend);
 
         chrono::high_resolution_clock::time_point frameStopTime = chrono::high_resolution_clock::now();
@@ -98,8 +117,7 @@ void cameraLoop()
         frameTime = frameStopTime-frameStartTime;
         waitTime = frameStartTime-waitStartTime;
         fps = 1000000.0/chrono::duration_cast<chrono::microseconds>(frameInterval).count();
-        cout << "fps: " << fps << "\t";
-        cout << "load: " << 100.0*(double)frameTime.count()/(double)frameInterval.count() << endl;
+        load = 100.0*(double)frameTime.count()/(double)frameInterval.count();
     }
 }
 
@@ -165,7 +183,7 @@ void networkLoop()
             {
                 uchar a;
                 socket.receive(asio::buffer(&a, sizeof(uchar)));
-                setAngle((int)a);
+                setAngle((int)a-90);
                 break;
             }
             case 23: // start recording
@@ -197,10 +215,10 @@ int main()
 
     //servo init
     pigpioID = pigpio_start(NULL, NULL);
-    set_mode(pigpioID, 24, PI_OUTPUT);
-    set_PWM_frequency(pigpioID, 24, 50);
-    set_PWM_range(pigpioID, 24, 20000); // 1,000,000 / 50 = 20,000us for 100% duty cycle
-    setAngle(135);
+    set_mode(pigpioID, servoPin, PI_OUTPUT);
+    set_PWM_frequency(pigpioID, servoPin, 50);
+    set_PWM_range(pigpioID, servoPin, 20000); // 1,000,000 / 50 = 20,000us for 100% duty cycle
+    setAngle(0);
     thread servoPowerSaveThread(servoDisableLoop);
 
     //camera init
@@ -236,6 +254,6 @@ void stop()
     running = false;
     this_thread::sleep_for(1s);
     udpSocket.close();
-    set_PWM_dutycycle(pigpioID, 24, 0);
+    set_PWM_dutycycle(pigpioID, servoPin, 0);
     pigpio_stop(pigpioID);
 }
