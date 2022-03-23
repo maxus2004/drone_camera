@@ -4,8 +4,17 @@
 #include "navigation.h"
 #include "fc_serial.h"
 #include "main.h"
-
+#include "PID.h"
 using namespace std;
+
+bool autopilot = false;
+
+PID xPid = {75,0.1,5,10,-10,5,-5};
+PID yPid = {75,0.1,5,10,-10,5,-5};
+
+void setAutopilot(bool enabled){
+    autopilot = enabled;
+}
 
 double cameraMatrixArray[3][3] = {
     {586.1899962688001, 0, 318.059252104379},
@@ -57,6 +66,8 @@ cv::Ptr<cv::aruco::Dictionary> dictionary;
 cv::Ptr<cv::aruco::Board> board;
 cv::Ptr<cv::aruco::DetectorParameters> parameters;
 cv::Mat distCoeffs, cameraMatrix;
+
+cv::Vec3f prevTarget = {0,0,0};
 
 void navigationInit()
 {
@@ -125,7 +136,7 @@ cv::Vec3d quatToRvec(cv::Vec4d q)
     return rvec;
 }
 
-void detectPosition(cv::Mat frame)
+void detectPosition(cv::Mat frame, float fps)
 {
     //detect markers
     std::vector<int> markerIds;
@@ -205,6 +216,7 @@ void detectPosition(cv::Mat frame)
     cv::Vec3d target;
     target[0] = droneTvec[0];
     target[1] = droneTvec[1];
+    target[2] = droneTvec[2];
     target = rotate(target, zRmat);
     target += targetOffset;
     //draw vector to target
@@ -212,15 +224,24 @@ void detectPosition(cv::Mat frame)
 
     //print coordinates
     stringstream outString;
-    outString << "box:    x: ";
+    outString << "box:    ";
     outString << boxTvec;
     cv::putText(frame, outString.str(), cv::Point(10, 60), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
     outString.str(std::string());
-    outString << "drone:  x: ";
+    outString << "drone:  ";
     outString << droneTvec;
     cv::putText(frame, outString.str(), cv::Point(10, 80), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
     outString.str(std::string());
     outString << "target: ";
     outString << target;
     cv::putText(frame, outString.str(), cv::Point(10, 100), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
+
+    if(autopilot){
+        float dTime = 1/fps;
+        float controlRoll = xPid.update(dTime,target[0],(target[0]-prevTarget[0])*fps,0);
+        float controlPitch = yPid.update(dTime,target[1],(target[1]-prevTarget[1])*fps,0);
+        sendControl(0,controlPitch,-controlRoll,0);
+    }
+
+    prevTarget = target;
 }

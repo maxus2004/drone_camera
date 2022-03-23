@@ -13,14 +13,18 @@
 #include <queue>
 #include "main.h"
 #include "navigation.h"
+#include "fc_serial.h"
 
 using namespace std;
 using namespace asio::ip;
 
+int grabberPin = 17;
 int servoPin = 18;
 
+chrono::system_clock::time_point lastGrabberMove;
 chrono::system_clock::time_point lastServoMove;
 bool servoActive = false;
+bool grabberActive = false;
 int pigpioID;
 bool navigating = true;
 bool running = true;
@@ -41,8 +45,10 @@ chrono::high_resolution_clock::duration frameTime;
 chrono::high_resolution_clock::duration waitTime;
 
 int cameraAngle = 0;
+int grabberAngle = 0;
 
-int getCameraAngle(){
+int getCameraAngle()
+{
     return cameraAngle;
 }
 
@@ -51,7 +57,15 @@ void setAngle(int angle)
     cameraAngle = angle;
     lastServoMove = chrono::system_clock::now();
     servoActive = true;
-    set_PWM_dutycycle(pigpioID, servoPin, 650 + ((135+angle) * 2000) / 180);
+    set_PWM_dutycycle(pigpioID, servoPin, 650 + ((135 - angle) * 2000) / 180);
+}
+
+void setGrabberAngle(int angle)
+{
+    grabberAngle = angle;
+    lastGrabberMove = chrono::system_clock::now();
+    grabberActive = true;
+    set_PWM_dutycycle(pigpioID, grabberPin, 500 + ((180-angle)*1600) / 180);
 }
 
 void servoDisableLoop()
@@ -64,18 +78,25 @@ void servoDisableLoop()
             servoActive = false;
             set_PWM_dutycycle(pigpioID, servoPin, 0);
         }
+        if (grabberActive && (lastGrabberMove + 1s) < now)
+        {
+            grabberActive = false;
+            set_PWM_dutycycle(pigpioID, grabberPin, 0);
+        }
         this_thread::sleep_for(0.1s);
     }
 }
 
-void sendFrame(cv::Mat jpegFrame){
+void sendFrame(cv::Mat jpegFrame)
+{
     array<uchar, 5> pattern = {0xFF, 0xD9, 0x00, 0x00, 0x00};
     const uchar *imageEnd = std::search(jpegFrame.datastart, jpegFrame.dataend, pattern.begin(), pattern.end()) + 2;
     int packetSize = min(imageEnd - jpegFrame.datastart, 65507);
     udpSocket.send_to(asio::buffer(jpegFrame.datastart, packetSize), remote_endpoint);
 }
 
-void saveImage(cv::Mat jpegFrame){
+void saveImage(cv::Mat jpegFrame)
+{
     array<uchar, 5> pattern = {0xFF, 0xD9, 0x00, 0x00, 0x00};
     const uchar *imageEnd = std::search(jpegFrame.datastart, jpegFrame.dataend, pattern.begin(), pattern.end()) + 2;
     ofstream fout;
@@ -97,8 +118,9 @@ void cameraLoop()
         chrono::high_resolution_clock::time_point frameStartTime = chrono::high_resolution_clock::now();
         camera.retrieve(frame);
 
-        if(navigating){
-            detectPosition(frame);
+        if (navigating)
+        {
+            detectPosition(frame, fps);
         }
 
         stringstream outString;
@@ -109,21 +131,31 @@ void cameraLoop()
         outString << "load: ";
         outString << load;
         cv::putText(frame, outString.str(), cv::Point(10, 40), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
-
+        outString.str(std::string());
+        outString << "drone_rotation: ";
+        outString << telemetry.rotation;
+        cv::putText(frame, outString.str(), cv::Point(10, 120), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
+        outString.str(std::string());
+        outString << "drone_target: ";
+        outString << telemetry.target;
+        cv::putText(frame, outString.str(), cv::Point(10, 140), cv::FONT_HERSHEY_PLAIN, 1, cv::Scalar(255, 255, 255));
         frame.copyTo(frameToSend);
 
         chrono::high_resolution_clock::time_point frameStopTime = chrono::high_resolution_clock::now();
-        frameInterval = frameStopTime-waitStartTime;
-        frameTime = frameStopTime-frameStartTime;
-        waitTime = frameStartTime-waitStartTime;
-        fps = 1000000.0/chrono::duration_cast<chrono::microseconds>(frameInterval).count();
-        load = 100.0*(double)frameTime.count()/(double)frameInterval.count();
+        frameInterval = frameStopTime - waitStartTime;
+        frameTime = frameStopTime - frameStartTime;
+        waitTime = frameStartTime - waitStartTime;
+        fps = 1000000.0 / chrono::duration_cast<chrono::microseconds>(frameInterval).count();
+        load = 100.0 * (double)frameTime.count() / (double)frameInterval.count();
     }
 }
 
-void streamLoop(){
-    while (true){
-        while(!streaming){
+void streamLoop()
+{
+    while (true)
+    {
+        while (!streaming)
+        {
             this_thread::sleep_for(100ms);
         }
         //TODO: use hardware jpeg encoder
@@ -131,11 +163,11 @@ void streamLoop(){
         vector<int> params;
         params.push_back(cv::IMWRITE_JPEG_QUALITY);
         params.push_back(80);
-        cv::imencode(".jpg",frameToSend,buffer,params);
+        cv::imencode(".jpg", frameToSend, buffer, params);
         cv::Mat frameJpeg(buffer);
 
         sendFrame(frameJpeg);
-    
+
         if (needToTakePicture)
         {
             needToTakePicture = false;
@@ -183,7 +215,7 @@ void networkLoop()
             {
                 uchar a;
                 socket.receive(asio::buffer(&a, sizeof(uchar)));
-                setAngle((int)a-90);
+                setAngle((int)a);
                 break;
             }
             case 23: // start recording
@@ -204,6 +236,20 @@ void networkLoop()
                 connected = false;
                 socket.close();
                 break;
+            case 28: // move grabber
+            {
+                uchar a;
+                socket.receive(asio::buffer(&a, sizeof(uchar)));
+                setGrabberAngle((int)a);
+                break;
+            }
+            case 29: // set navigation
+            {
+                bool enabled;
+                socket.receive(asio::buffer(&enabled, sizeof(bool)));
+                setAutopilot(enabled);
+                break;
+            }
             }
         }
     }
@@ -216,9 +262,13 @@ int main()
     //servo init
     pigpioID = pigpio_start(NULL, NULL);
     set_mode(pigpioID, servoPin, PI_OUTPUT);
+    set_mode(pigpioID, grabberPin, PI_OUTPUT);
+    set_PWM_frequency(pigpioID, grabberPin, 50);
+    set_PWM_range(pigpioID, grabberPin, 20000);
     set_PWM_frequency(pigpioID, servoPin, 50);
     set_PWM_range(pigpioID, servoPin, 20000); // 1,000,000 / 50 = 20,000us for 100% duty cycle
     setAngle(0);
+    setGrabberAngle(0);
     thread servoPowerSaveThread(servoDisableLoop);
 
     //camera init
@@ -226,10 +276,10 @@ int main()
     camera.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     camera.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     char format[] = "BGR3";
-    camera.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc(format[0],format[1],format[2],format[3]));
+    camera.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc(format[0], format[1], format[2], format[3]));
     camera.set(cv::CAP_PROP_FPS, 30);
     camera.set(cv::CAP_PROP_AUTO_EXPOSURE, 1);
-    camera.set(cv::CAP_PROP_EXPOSURE, 100);
+    camera.set(cv::CAP_PROP_EXPOSURE, 20);
     camera.set(cv::CAP_PROP_BUFFERSIZE, 1);
     camera.set(cv::CAP_PROP_CONVERT_RGB, 0);
     thread cameraThread(cameraLoop);

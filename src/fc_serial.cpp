@@ -12,7 +12,11 @@
 
 
 static std::thread read_thread;
-static cv::Vec4f rotation;
+
+telemetry_t telemetry = {0};
+
+uint8_t controlPacketHeader[8] = { 50,51,52,53,54,55,56,57 };
+
 static int serial_port;
 //linux serial port tutorial
 //https://blog.mbedded.ninja/programming/operating-systems/linux/linux-serial-ports-using-c-cpp/
@@ -24,12 +28,12 @@ static void send(uint8_t *data, int count)
 
 static void received(uint8_t *data, int count)
 {
-    if (count == 17)
+    if (count == 4*4+3*4+1)
     {
-        float r_array[4];
-        memcpy(r_array,data,16);
-        cv::Vec4f r = cv::Vec4f(r_array[0],r_array[1],r_array[2],r_array[3]);
-        rotation = r;
+        float r_array[4+3];
+        memcpy(r_array,data,4*4+3*4);
+        telemetry.rotation = cv::Vec4f(r_array[0],r_array[1],r_array[2],r_array[3]);
+        telemetry.target = cv::Vec3f(r_array[4],r_array[5],r_array[6]);
     }
 }
 
@@ -49,7 +53,7 @@ static void readLoop()
         for(int i = 0;i<count;i++){
             receive_queue.push(read_buf[i]);
             int len = receive_queue.size();
-            if(len>16 && read_buf[i]=='\n'){
+            if(len>28 && read_buf[i]=='\n'){
                 std::vector<uint8_t> buf;
                 for(int j = 0;j<len;j++){
                     buf.push_back(receive_queue.front());
@@ -61,6 +65,16 @@ static void readLoop()
 
         
     }
+}
+
+void sendControl(float yaw, float pitch, float roll, float thrust){
+    controlPacket_t controlPacket;
+    memcpy(controlPacket.header,controlPacketHeader,sizeof(controlPacketHeader));
+    controlPacket.yaw = yaw;
+    controlPacket.pitch = pitch;
+    controlPacket.roll = roll;
+    controlPacket.thrust = thrust;
+    send((uint8_t*)&controlPacket,sizeof(controlPacket_t));
 }
 
 void init_serial()
@@ -115,5 +129,5 @@ void init_serial()
 
 cv::Vec4f fc_getRotation()
 {
-    return rotation;
+    return telemetry.rotation;
 }
